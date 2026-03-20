@@ -13,6 +13,28 @@ from torch.utils.cpp_extension import (
 )
 
 
+def get_nvcc_version():
+    # Check NVCC Version
+    # NOTE The "CUDA_HOME" here is not necessarily from the `CUDA_HOME` environment variable. For more details, see `torch/utils/cpp_extension.py`
+    assert CUDA_HOME is not None, "PyTorch must be compiled with CUDA support"
+    nvcc_version = subprocess.check_output(
+        [os.path.join(CUDA_HOME, "bin", "nvcc"), '--version'], stderr=subprocess.STDOUT
+    ).decode('utf-8')
+    nvcc_version_number = nvcc_version.split('release ')[1].split(',')[0].strip()
+    major, minor = map(int, nvcc_version_number.split('.'))
+    return major, minor
+
+
+def get_include_flags():
+    major, _ = get_nvcc_version()
+    flags = []
+    if major >= 13:
+        # CUDA 13 std headers are placed in <cccl/cuda/std/...> instead of <cuda/std/...>
+        cccl_dir = os.path.join(CUDA_HOME, "include", "cccl")
+        # nvcc doesn't recognize -isystem. Use -I instead.
+        flags.append(f"-I{cccl_dir}")
+    return flags
+
 def is_flag_set(flag: str) -> bool:
     return os.getenv(flag, "FALSE").lower() in ["true", "1", "y", "yes"]
 
@@ -56,7 +78,7 @@ this_dir = os.path.dirname(os.path.abspath(__file__))
 if IS_WINDOWS:
     cxx_args = ["/O2", "/std:c++20", "/DNDEBUG", "/W0"]
 else:
-    cxx_args = ["-O3", "-std=c++20", "-DNDEBUG", "-Wno-deprecated-declarations"]
+    cxx_args = ["-O0", "-g", "-std=c++20", "-Wno-deprecated-declarations"]
 
 ext_modules = []
 ext_modules.append(
@@ -104,9 +126,10 @@ ext_modules.append(
             "csrc/sm100/prefill/sparse/fwd_for_small_topk/head128/instantiations/phase1_decode_k512.cu",
         ],
         extra_compile_args={
-            "cxx": cxx_args + get_features_args(),
+            "cxx": cxx_args + get_features_args() + get_include_flags(),
             "nvcc": [
-                "-O3",
+                "-O0",
+                "-g",
                 "-std=c++20",
                 "-DNDEBUG",
                 "-D_USE_MATH_DEFINES",
@@ -121,7 +144,7 @@ ext_modules.append(
                 "--ptxas-options=-v,--register-usage-level=10,--warn-on-spills,--warn-on-local-memory-usage,--warn-on-double-precision-use",
                 "-lineinfo",
                 "--source-in-ptx",
-            ] + get_features_args() + get_arch_flags() + get_nvcc_thread_args(),
+            ] + get_features_args() + get_arch_flags() + get_nvcc_thread_args() + get_include_flags(),
         },
         include_dirs=[
             Path(this_dir) / "csrc",
