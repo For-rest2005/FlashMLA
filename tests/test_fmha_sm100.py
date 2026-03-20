@@ -66,8 +66,12 @@ def test_flash_attention(b, mean_sq, mean_sk, varlen, h, h_k, d, dv, causal, win
     total_k = seqlens_k.sum().item()
     max_seqlen_q = seqlens_q.max().item()
     max_seqlen_k = seqlens_k.max().item()
-    total_attn_compute = sum([(get_attn_bias(seqlens_q[i].item(), seqlens_k[i].item(),
-                             causal, window) == 0).sum().item() for i in range(b)])
+    if (seqlens_q == seqlens_k).all() and causal and window == 0:
+        # Do not materialize get_attn_bias to avoid OOM.
+        total_attn_compute = (seqlens_q.to(torch.int64) * (seqlens_q + 1) // 2).sum().item()
+    else:
+        total_attn_compute = sum([(get_attn_bias(seqlens_q[i].item(), seqlens_k[i].item(),
+                                causal, window) == 0).sum().item() for i in range(b)])
     # print(f"{total_q=}, {max_seqlen_q=}, {total_k=}, {max_seqlen_k=}, {total_attn_compute=}, {cu_seqlens_q.tolist()}, {cu_seqlens_k.tolist()}")
 
     q = torch.randn(total_q, h, d) / 10
@@ -158,6 +162,25 @@ def test_flash_attention(b, mean_sq, mean_sk, varlen, h, h_k, d, dv, causal, win
     if has_bwd:
         timer(backward, "bwd")
 
+def test_single_config():
+    dtype = torch.bfloat16
+    torch.set_default_dtype(dtype)
+    device = torch.device("cuda:0")
+    torch.set_default_device(device)
+    torch.cuda.set_device(device)
+    torch.set_float32_matmul_precision("high")
+
+    b = 1
+    mean_sq = mean_sk = 1048576
+    varlen = False
+    h = h_k = 1
+    d, dv = 192, 128
+    causal = True
+    window = 0
+    has_bwd = True
+    check_correctness = False
+
+    test_flash_attention(b, mean_sq, mean_sk, varlen, h, h_k, d, dv, causal, window, has_bwd, check_correctness)
 
 if __name__ == "__main__":
     dtype = torch.bfloat16
